@@ -1,0 +1,141 @@
+html.show-home,
+html.show-home body {
+  height: 100%;
+  min-height: 100%;
+  background: #1c2430;
+  overflow: auto;
+}
+
+html.show-home #app {
+  display: none;
+}
+
+.home {
+  display: none;
+  min-height: 100%;
+  min-height: 100vh;
+  background:
+    radial-gradient(540px 280px at 8% 0%, rgba(196, 122, 58, .32), transparent 70%),
+    radial-gradient(460px 300px at 100% 100%, rgba(47, 111, 122, .4), transparent 72%),
+    #1c2430;
+  color: #1c2430;
+}
+
+html.show-home .home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 32px 20px;
+}
+
+.home-panel {
+  width: min(420px, 100%);
+  padding: 36px 32px 28px;
+  border-radius: 18px;
+  background: #f6f3ee;
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .32);
+}
+
+.home-name {
+  margin: 0;
+  color: #1c2430;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  line-height: 1.3;
+  text-align: center;
+}
+
+.home-hint {
+  display: block;
+  margin: 26px 0 10px;
+  color: #5e584f;
+  font-size: 15px;
+}
+
+.home-dialog-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid #c47a3a;
+  border-radius: 10px;
+  outline: none;
+  color: #1c2430;
+  font-size: 16px;
+  background: #fff;
+}
+
+.home-dialog-input:focus {
+  border-color: #2f6f7a;
+}
+
+.home-ok {
+  width: 100%;
+  height: 46px;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 10px;
+  background: #2f6f7a;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.home-ok:hover {
+  background: #275e68;
+}
+
+.home-toast {
+  position: fixed;
+  z-index: 30;
+  top: 46%;
+  left: 50%;
+  max-width: 70%;
+  padding: 10px 16px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .72);
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.home-toast[hidden] {
+  display: none;
+}
+
+.toolbar .home-back {
+  margin: 1%;
+  white-space: nowrap;
+}
+
+html:not(.show-home),
+html:not(.show-home) body,
+html:not(.show-home) #app {
+  height: 100%;
+  overflow: hidden;
+}
+
+html:not(.show-home) #app > div {
+  display: flex !important;
+  flex-direction: column !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding-bottom: var(--table-h, 260px) !important;
+  overflow: hidden !important;
+}
+
+html:not(.show-home) #app > div > .select-box,
+html:not(.show-home) #app > div > .btn {
+  flex: 0 0 auto;
+}
+
+html:not(.show-home) #app > div > div[style*="position"] {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
