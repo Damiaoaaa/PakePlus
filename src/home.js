@@ -49,7 +49,7 @@
   var fittedKey = "";
 
   function fitView() {
-    if (!isViewer()) return;
+    if (window.__ffExporting || !isViewer()) return;
     var table = document.querySelector(".table-container");
     if (table) document.documentElement.style.setProperty("--table-h", table.offsetHeight + "px");
     var canvas = document.querySelector("#app canvas");
