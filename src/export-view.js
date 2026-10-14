@@ -79,91 +79,123 @@
     view.m_bNeedUpdate = true;
   }
 
-  function cropPng(dataUrl) {
-    return new Promise(function (resolve) {
-      var img = new Image();
-      img.onload = function () {
-        var src = document.createElement("canvas");
-        src.width = img.width;
-        src.height = img.height;
-        var ctx = src.getContext("2d", { willReadFrequently: true });
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, src.width, src.height);
-        ctx.drawImage(img, 0, 0);
-        var pixels = ctx.getImageData(0, 0, src.width, src.height).data;
-        var minX = src.width;
-        var minY = src.height;
-        var maxX = -1;
-        var maxY = -1;
-        var stride = 2;
-        for (var y = 0; y < src.height; y += stride) {
-          for (var x = 0; x < src.width; x += stride) {
-            var i = (y * src.width + x) * 4;
-            if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250) {
-              if (x < minX) minX = x;
-              if (y < minY) minY = y;
-              if (x > maxX) maxX = x;
-              if (y > maxY) maxY = y;
-            }
-          }
-        }
-        if (maxX < minX) {
-          resolve(dataUrl);
-          return;
-        }
-        var pad = Math.round(Math.max(src.width, src.height) * 0.015) + stride;
-        minX = Math.max(0, minX - pad);
-        minY = Math.max(0, minY - pad);
-        maxX = Math.min(src.width - 1, maxX + pad);
-        maxY = Math.min(src.height - 1, maxY + pad);
-        var cw = maxX - minX + 1;
-        var ch = maxY - minY + 1;
-        var out = document.createElement("canvas");
-        out.width = cw;
-        out.height = ch;
-        out.getContext("2d").drawImage(src, minX, minY, cw, ch, 0, 0, cw, ch);
-        resolve(out.toDataURL("image/png"));
-      };
-      img.src = dataUrl;
-    });
-  }
+  var EXPORT_SIZE = 1920;
 
-  async function capture(view) {
+  function openShot(view) {
     var renderer = view.m_Render;
     var cam = view.m_Camera;
-    var oldRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : (window.devicePixelRatio || 1);
-    var oldW = view._Width;
-    var oldH = view._Height;
-    var size = 2560;
-    var url;
-    try {
-      renderer.setPixelRatio(1);
-      renderer.setSize(size, size, false);
-      view._Width = size;
-      view._Height = size;
-      cam.SetSize(size, size);
-      view.ZoomAll();
-      cam.m_ViewHeight *= 1.04;
-      cam.Update();
-      view.Render();
-      url = renderer.domElement.toDataURL("image/png");
-    } finally {
-      renderer.setPixelRatio(oldRatio);
-      renderer.setSize(oldW || 0, oldH || 0, false);
-      view._Width = oldW;
-      view._Height = oldH;
-      cam.SetSize(oldW, oldH);
-      cam.Update();
-      view.m_bNeedUpdate = true;
-    }
-    return cropPng(url);
+    var shot = {
+      view: view,
+      renderer: renderer,
+      cam: cam,
+      ratio: renderer.getPixelRatio ? renderer.getPixelRatio() : (window.devicePixelRatio || 1),
+      width: view._Width,
+      height: view._Height,
+      scratch: document.createElement("canvas"),
+      out: document.createElement("canvas")
+    };
+    shot.scratchCtx = shot.scratch.getContext("2d", { willReadFrequently: true });
+    shot.outCtx = shot.out.getContext("2d");
+    applyShotSize(shot);
+    return shot;
   }
 
-  function dataUrlBytes(url) {
-    var bin = atob(url.split(",")[1]);
+  function applyShotSize(shot) {
+    shot.renderer.setPixelRatio(1);
+    shot.renderer.setSize(EXPORT_SIZE, EXPORT_SIZE, false);
+    shot.view._Width = EXPORT_SIZE;
+    shot.view._Height = EXPORT_SIZE;
+    shot.cam.SetSize(EXPORT_SIZE, EXPORT_SIZE);
+    if (shot.scratch.width !== EXPORT_SIZE) {
+      shot.scratch.width = EXPORT_SIZE;
+      shot.scratch.height = EXPORT_SIZE;
+    }
+  }
+
+  function frameShot(shot) {
+    applyShotSize(shot);
+    if (shot.view.ViewToSwiso) shot.view.ViewToSwiso();
+    shot.view.ZoomAll();
+    shot.cam.m_ViewHeight *= 1.04;
+    shot.cam.Update();
+  }
+
+  function closeShot(shot) {
+    if (!shot) return;
+    shot.renderer.setPixelRatio(shot.ratio);
+    shot.renderer.setSize(shot.width || 0, shot.height || 0, false);
+    shot.view._Width = shot.width;
+    shot.view._Height = shot.height;
+    shot.cam.SetSize(shot.width, shot.height);
+    shot.cam.Update();
+    shot.view.m_bNeedUpdate = true;
+    shot.scratch.width = 1;
+    shot.scratch.height = 1;
+    shot.out.width = 1;
+    shot.out.height = 1;
+  }
+
+  function cropCanvas(shot, glCanvas) {
+    var src = shot.scratch;
+    var ctx = shot.scratchCtx;
+    var width = glCanvas.width || EXPORT_SIZE;
+    var height = glCanvas.height || EXPORT_SIZE;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(glCanvas, 0, 0, width, height);
+    var pixels = ctx.getImageData(0, 0, width, height).data;
+    var minX = width;
+    var minY = height;
+    var maxX = -1;
+    var maxY = -1;
+    var stride = 4;
+    for (var y = 0; y < height; y += stride) {
+      var row = y * width;
+      for (var x = 0; x < width; x += stride) {
+        var i = (row + x) * 4;
+        if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX) {
+      minX = 0;
+      minY = 0;
+      maxX = width - 1;
+      maxY = height - 1;
+    }
+    var pad = Math.round(Math.max(width, height) * 0.015) + stride;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(width - 1, maxX + pad);
+    maxY = Math.min(height - 1, maxY + pad);
+    var cw = maxX - minX + 1;
+    var ch = maxY - minY + 1;
+    var out = shot.out;
+    out.width = cw;
+    out.height = ch;
+    shot.outCtx.drawImage(src, minX, minY, cw, ch, 0, 0, cw, ch);
+    return out;
+  }
+
+  function pngBytes(canvas) {
+    var url = canvas.toDataURL("image/png");
+    var bin = atob(url.slice(url.indexOf(",") + 1));
     var out = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out;
+  }
+
+  function grab(shot) {
+    shot.view.Render();
+    return pngBytes(cropCanvas(shot, shot.renderer.domElement));
+  }
+
+  function pause() {
+    return new Promise(function (resolve) { setTimeout(resolve, 0); });
   }
 
   function safeName(name) {
@@ -195,37 +227,46 @@
   function u16(n) { return new Uint8Array([n & 255, (n >> 8) & 255]); }
   function u32(n) { return new Uint8Array([n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255]); }
 
+  function zipEntry(name, data, offset) {
+    var nameBytes = new TextEncoder().encode(name);
+    var crc = crc32(data);
+    var bytes = concat([
+      u32(0x04034b50), u16(20), u16(0x800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0),
+      nameBytes, data
+    ]);
+    var central = concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0x800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ]);
+    return { bytes: bytes, central: central };
+  }
+
+  function zipEnd(central, count, offset) {
+    return concat([
+      central,
+      u32(0x06054b50), u16(0), u16(0), u16(count), u16(count),
+      u32(central.length), u32(offset), u16(0)
+    ]);
+  }
+
   function buildZip(files) {
-    var locals = [];
+    var parts = [];
     var central = [];
     var offset = 0;
     for (var i = 0; i < files.length; i++) {
-      var name = new TextEncoder().encode(files[i].name);
-      var data = files[i].data;
-      var crc = crc32(data);
-      var local = concat([
-        u32(0x04034b50), u16(20), u16(0x800), u16(0), u16(0), u16(0),
-        u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0),
-        name, data
-      ]);
-      locals.push(local);
-      central.push(concat([
-        u32(0x02014b50), u16(20), u16(20), u16(0x800), u16(0), u16(0), u16(0),
-        u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0),
-        u16(0), u16(0), u32(0), u32(offset), name
-      ]));
-      offset += local.length;
+      var entry = zipEntry(files[i].name, files[i].data, offset);
+      parts.push(entry.bytes);
+      central.push(entry.central);
+      offset += entry.bytes.length;
     }
-    var centralBytes = concat(central);
-    var end = concat([
-      u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
-      u32(centralBytes.length), u32(offset), u16(0)
-    ]);
-    return concat(locals.concat([centralBytes, end]));
+    parts.push(zipEnd(concat(central), files.length, offset));
+    return new Blob(parts, { type: "application/zip" });
   }
 
   function browserDownload(bytes, filename, type) {
-    var blob = new Blob([bytes], { type: type || "application/zip" });
+    var blob = bytes instanceof Blob ? bytes : new Blob([bytes], { type: type || "application/zip" });
     var link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = filename;
@@ -242,31 +283,109 @@
     return base + filename;
   }
 
-  function writeDesktopFile(bytes, filename) {
-    var tauri = window.__TAURI__;
-    if (!tauri || !tauri.core || !tauri.core.invoke) return Promise.resolve("");
-    var invoke = tauri.core.invoke;
-    var data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    function write(path, options) {
-      return invoke("plugin:fs|write_file", data, {
-        headers: {
-          path: encodeURIComponent(path),
-          options: JSON.stringify(options || {})
-        }
-      }).catch(function () {
-        return invoke("plugin:fs|write_file", {
-          path: path,
-          contents: Array.from(data),
-          options: options || {}
-        });
-      });
-    }
-    return invoke("plugin:path|resolve_directory", { directory: 18 }).then(function (dir) {
-      var full = joinPath(dir, filename);
-      return write(full, {}).then(function () { return full; });
-    }).catch(function () {
-      return write(filename, { baseDir: 18 }).then(function () { return filename; });
+  function hasTauri() {
+    return !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+  }
+
+  function writeRaw(path, bytes, append) {
+    var invoke = window.__TAURI__.core.invoke;
+    return invoke("plugin:fs|write_file", bytes, {
+      headers: {
+        path: encodeURIComponent(path),
+        options: JSON.stringify(append ? { append: true } : {})
+      }
     });
+  }
+
+  function desktopFile(filename) {
+    return window.__TAURI__.core.invoke("plugin:path|resolve_directory", { directory: 18 }).then(function (dir) {
+      return joinPath(dir, filename);
+    });
+  }
+
+  function ZipOut(path) {
+    this.path = path;
+    this.offset = 0;
+    this.central = [];
+    this.count = 0;
+    this.append = false;
+  }
+
+  ZipOut.prototype.add = function (name, data) {
+    var entry = zipEntry(name, data, this.offset);
+    var self = this;
+    return writeRaw(this.path, entry.bytes, this.append).then(function () {
+      self.append = true;
+      self.central.push(entry.central);
+      self.offset += entry.bytes.length;
+      self.count += 1;
+    });
+  };
+
+  ZipOut.prototype.finish = function () {
+    if (!this.count) return Promise.resolve();
+    return writeRaw(this.path, zipEnd(concat(this.central), this.count, this.offset), true);
+  };
+
+  function writeDesktopFile(bytes, filename) {
+    if (!hasTauri()) return Promise.resolve("");
+    var data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    return desktopFile(filename).then(function (full) {
+      return writeRaw(full, data, false).then(function () { return full; });
+    });
+  }
+
+  function psQuote(value) {
+    return "'" + String(value == null ? "" : value).replace(/'/g, "''") + "'";
+  }
+
+  function runCommand(command) {
+    return window.__TAURI__.core.invoke("run_command", { command: command });
+  }
+
+  async function appendSupported(dir) {
+    if (window.__ffAppend != null) return window.__ffAppend;
+    var path = joinPath(dir, ".ff-write-test.bin");
+    var ok = false;
+    try {
+      await writeRaw(path, new Uint8Array([1, 2, 3, 4]), false);
+      await writeRaw(path, new Uint8Array([5, 6]), true);
+      var length = parseInt(String(await runCommand("(Get-Item -LiteralPath " + psQuote(path) + ").Length")).trim(), 10);
+      ok = length === 6;
+    } catch (error) {
+      ok = false;
+    }
+    try { await runCommand("Remove-Item -LiteralPath " + psQuote(path) + " -Force"); } catch (cleanupError) {}
+    window.__ffAppend = ok;
+    return ok;
+  }
+
+  function FolderOut(dir) {
+    this.dir = dir;
+    this.made = new Set();
+    this.count = 0;
+  }
+
+  FolderOut.prototype.add = function (name, data) {
+    var full = joinPath(this.dir, String(name).replace(/\//g, "\\"));
+    var slash = Math.max(full.lastIndexOf("\\"), full.lastIndexOf("/"));
+    var parent = slash > 0 ? full.slice(0, slash) : this.dir;
+    var self = this;
+    var ready = this.made.has(parent) ? Promise.resolve() : runCommand("New-Item -ItemType Directory -Force -Path " + psQuote(parent) + " | Out-Null").then(function () {
+      self.made.add(parent);
+    });
+    return ready.then(function () {
+      return writeRaw(full, data, false);
+    }).then(function () {
+      self.count += 1;
+    });
+  };
+
+  async function openSink(filename) {
+    var dir = await window.__TAURI__.core.invoke("plugin:path|resolve_directory", { directory: 18 });
+    if (await appendSupported(dir)) return { kind: "zip", out: new ZipOut(joinPath(dir, filename)), label: filename };
+    var folder = filename.replace(/\.zip$/i, "");
+    return { kind: "folder", out: new FolderOut(joinPath(dir, folder)), label: folder };
   }
 
   function download(bytes, filename, type) {
@@ -400,7 +519,9 @@
     var boxes = (ctx.vm.boxList || []).slice();
     if (!boxes.length) boxes = [{ BoxID: ctx.vm.selBoxID, Name: "柜体" }];
     var button = document.querySelector(".export-btn");
+    window.__ffExporting = true;
     setBusy(button, "导出中");
+    var sink = null;
     try {
       ctx.camera = saveCamera(ctx.view);
       ctx.visible = visibleData(ctx.vm);
@@ -414,26 +535,39 @@
         orderInfo: ctx.vm.orderInfo
       };
       ctx.viewTrans = !!ctx.vm.viewTrans;
-      var files = [];
+      ctx.shot = openShot(ctx.view);
+      var memoryFiles = [];
       var folders = new Set();
       var solidNames = new Set();
       var multi = boxes.length > 1;
+      var zipName = multi ? safeName(ctx.vm.orderNo || "订单") + ".zip" : cabinetName(ctx.vm) + ".zip";
+      var count = 0;
+      async function store(name) {
+        var bytes = grab(ctx.shot);
+        if (hasTauri()) {
+          if (!sink) sink = await openSink(zipName);
+          await sink.out.add(name, bytes);
+        } else {
+          memoryFiles.push({ name: name, data: bytes });
+        }
+        count += 1;
+        await pause();
+      }
       for (var b = 0; b < boxes.length; b++) {
         var box = boxes[b];
         if (String(ctx.vm.selBoxID) !== String(box.BoxID)) ctx.switched = true;
         setBusy(button, "柜" + (b + 1) + "/" + boxes.length);
         if (!await loadCabinet(ctx.vm, box.BoxID)) continue;
+        var live = viewer();
+        if (live && ctx.shot.view !== live) {
+          closeShot(ctx.shot);
+          ctx.shot = openShot(live);
+        }
         var show = ctx.vm.$refs.showView;
         show.setData(ctx.vm.viewData, true);
         show.setMaterial({ transparent: false });
-        await waitFrame();
-        var view = viewer();
-        if (view && view.ViewToSwiso) view.ViewToSwiso();
-        if (view && view.Render) view.Render();
-        files.push({
-          name: "实体图/" + solidFileName(ctx.vm, box, solidNames),
-          data: dataUrlBytes(await capture(viewer()))
-        });
+        frameShot(ctx.shot);
+        await store("实体图/" + solidFileName(ctx.vm, box, solidNames));
         show.setMaterial({ transparent: ctx.viewTrans });
         var cabinetRows = boardRows(ctx.vm);
         var folder = multi ? uniqueFolder(box.Name || ("柜体" + (b + 1)), folders) : "";
@@ -442,22 +576,30 @@
           setBusy(button, (b + 1) + "/" + boxes.length + " " + (i + 1) + "/" + cabinetRows.length);
           ctx.vm.selectedBlockNo = cabinetRows[i].row.ItemNo;
           show.selectBlock(cabinetRows[i].row.DataID);
-          await waitFrame();
           var name = fileName(cabinetRows[i].row, i, used);
           if (folder) name = folder + "/" + name;
-          files.push({ name: name, data: dataUrlBytes(await capture(viewer())) });
+          await store(name);
         }
       }
-      if (!files.length) {
+      if (!count) {
         alert("没有可导出的板件");
         return;
       }
-      var zipName = multi ? safeName(ctx.vm.orderNo || "订单") + ".zip" : cabinetName(ctx.vm) + ".zip";
-      await download(buildZip(files), zipName);
+      var savedLabel = "";
+      closeShot(ctx.shot);
+      ctx.shot = null;
+      if (sink) {
+        setBusy(button, "保存");
+        if (sink.out.finish) await sink.out.finish();
+        savedLabel = sink.label;
+      } else {
+        browserDownload(buildZip(memoryFiles), zipName);
+      }
     } catch (error) {
       alert("导出失败");
       console.error(error);
     } finally {
+      closeShot(ctx.shot);
       if (ctx.switched && ctx.saved) {
         ctx.vm.selBoxID = ctx.saved.selBoxID;
         ctx.vm.blocks = ctx.saved.blocks;
@@ -468,8 +610,10 @@
       }
       if (ctx.viewTrans != null && ctx.show && ctx.show.setMaterial) ctx.show.setMaterial({ transparent: ctx.viewTrans });
       restoreExport(ctx);
+      window.__ffExporting = false;
       setBusy(null, "");
     }
+    if (savedLabel) alert("已保存到桌面：" + savedLabel);
   }
 
   async function onExportCurrent() {
@@ -477,17 +621,24 @@
     var ctx = prepareExport();
     if (!ctx) return;
     var button = document.querySelector(".export-current-btn");
+    window.__ffExporting = true;
     setBusy(button, "导出中");
     try {
       ctx.camera = saveCamera(ctx.view);
       ctx.visible = visibleData(ctx.vm);
-      var png = dataUrlBytes(await capture(ctx.view));
+      ctx.shot = openShot(ctx.view);
+      frameShot(ctx.shot);
+      var png = grab(ctx.shot);
+      closeShot(ctx.shot);
+      ctx.shot = null;
       await download(png, cabinetName(ctx.vm) + "_当前.png", "image/png");
     } catch (error) {
       alert("导出失败");
       console.error(error);
     } finally {
+      closeShot(ctx.shot);
       restoreExport(ctx);
+      window.__ffExporting = false;
       setBusy(null, "");
     }
   }
