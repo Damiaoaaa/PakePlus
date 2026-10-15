@@ -112,8 +112,18 @@
     }
   }
 
+  function setDimensionsVisible(view, visible) {
+    var scene = view && view.m_Scene;
+    if (!scene) return;
+    scene.children.forEach(function (child) {
+      if (!child.isGroup) return;
+      child.traverse(function (node) { node.visible = visible; });
+    });
+  }
+
   function frameShot(shot) {
     applyShotSize(shot);
+    setDimensionsVisible(shot.view, false);
     if (shot.view.ViewToSwiso) shot.view.ViewToSwiso();
     shot.view.ZoomAll();
     shot.cam.m_ViewHeight *= 1.04;
@@ -122,6 +132,7 @@
 
   function closeShot(shot) {
     if (!shot) return;
+    setDimensionsVisible(shot.view, true);
     shot.renderer.setPixelRatio(shot.ratio);
     shot.renderer.setSize(shot.width || 0, shot.height || 0, false);
     shot.view._Width = shot.width;
