@@ -308,8 +308,95 @@
     });
   }
 
+  function desktopDirectory() {
+    return window.__TAURI__.core.invoke("plugin:path|resolve_directory", { directory: 18 });
+  }
+
+  var exportDirKey = "ff-export-dir";
+
+  function savedExportDir() {
+    try { return String(localStorage.getItem(exportDirKey) || "").trim(); } catch (error) { return ""; }
+  }
+
+  function rememberExportDir(dir) {
+    var text = String(dir || "").trim();
+    try {
+      if (text) localStorage.setItem(exportDirKey, text);
+      else localStorage.removeItem(exportDirKey);
+    } catch (error) {}
+    var button = document.querySelector(".export-path-btn");
+    if (button) button.title = text ? ("保存到：" + text) : "选择导出保存文件夹，未选择时保存到桌面";
+  }
+
+  function encodeCommand(script) {
+    var bytes = new Uint8Array(script.length * 2);
+    for (var i = 0; i < script.length; i++) {
+      var code = script.charCodeAt(i);
+      bytes[i * 2] = code & 255;
+      bytes[i * 2 + 1] = (code >> 8) & 255;
+    }
+    var binary = "";
+    for (var j = 0; j < bytes.length; j++) binary += String.fromCharCode(bytes[j]);
+    return btoa(binary);
+  }
+
+  async function pickDirectory() {
+    if (!hasTauri()) {
+      var typed = window.prompt("请输入导出保存文件夹的完整路径", savedExportDir() || "");
+      return typed ? typed.trim() : "";
+    }
+    var invoke = window.__TAURI__.core.invoke;
+    var payloads = [
+      { directory: true, multiple: false, title: "选择导出保存文件夹" },
+      { options: { directory: true, multiple: false, title: "选择导出保存文件夹" } }
+    ];
+    for (var i = 0; i < payloads.length; i++) {
+      try {
+        var picked = await invoke("plugin:dialog|open", payloads[i]);
+        if (typeof picked === "string") return picked.trim();
+        if (picked == null) return "";
+      } catch (error) {}
+    }
+    var current = savedExportDir();
+    var script = [
+      "Add-Type -AssemblyName System.Windows.Forms",
+      "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
+      "$dialog.Description = '选择导出保存文件夹'",
+      "$dialog.ShowNewFolderButton = $true",
+      "$current = " + psQuote(current),
+      "if ($current -and (Test-Path -LiteralPath $current)) { $dialog.SelectedPath = $current }",
+      "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }"
+    ].join("\n");
+    try {
+      var output = await runCommand("powershell.exe -STA -NoProfile -EncodedCommand " + encodeCommand(script));
+      return String(output || "").replace(/^\uFEFF/, "").trim();
+    } catch (error2) {
+      return "";
+    }
+  }
+
+  async function chooseExportDir() {
+    var picked = await pickDirectory();
+    if (picked) rememberExportDir(picked);
+    return picked || savedExportDir();
+  }
+
+  async function ensureExportDir() {
+    if (!hasTauri() || savedExportDir()) return;
+    await chooseExportDir();
+  }
+
+  async function exportDirectory() {
+    var custom = savedExportDir();
+    var dir = custom || await desktopDirectory();
+    if (custom) {
+      try { await runCommand("New-Item -ItemType Directory -Force -Path " + psQuote(dir) + " | Out-Null"); } catch (error) {}
+    }
+    return dir;
+  }
+
   function desktopFile(filename) {
-    return window.__TAURI__.core.invoke("plugin:path|resolve_directory", { directory: 18 }).then(function (dir) {
+    return exportDirectory().then(function (dir) {
       return joinPath(dir, filename);
     });
   }
@@ -393,16 +480,16 @@
   };
 
   async function openSink(filename) {
-    var dir = await window.__TAURI__.core.invoke("plugin:path|resolve_directory", { directory: 18 });
-    if (await appendSupported(dir)) return { kind: "zip", out: new ZipOut(joinPath(dir, filename)), label: filename };
-    var folder = filename.replace(/\.zip$/i, "");
-    return { kind: "folder", out: new FolderOut(joinPath(dir, folder)), label: folder };
+    var dir = await exportDirectory();
+    if (await appendSupported(dir)) return { kind: "zip", out: new ZipOut(joinPath(dir, filename)), label: joinPath(dir, filename) };
+    var folder = joinPath(dir, filename.replace(/\.zip$/i, ""));
+    return { kind: "folder", out: new FolderOut(folder), label: folder };
   }
 
   function download(bytes, filename, type) {
     return writeDesktopFile(bytes, filename).then(function (saved) {
       if (saved) {
-        alert("已保存到桌面：" + filename);
+        alert("已保存到：" + saved);
         return;
       }
       browserDownload(bytes, filename, type);
@@ -446,8 +533,9 @@
 
   function setBusy(active, text) {
     exportState.running = !!text;
-    document.querySelectorAll(".export-btn, .export-current-btn").forEach(function (btn) {
+    document.querySelectorAll(".export-btn, .export-current-btn, .export-path-btn").forEach(function (btn) {
       btn.disabled = exportState.running;
+      if (btn.classList.contains("export-path-btn")) return;
       if (btn === active && text) btn.textContent = text;
       if (!exportState.running) btn.textContent = btn.classList.contains("export-current-btn") ? "当前" : "导出";
     });
@@ -530,6 +618,7 @@
     var boxes = (ctx.vm.boxList || []).slice();
     if (!boxes.length) boxes = [{ BoxID: ctx.vm.selBoxID, Name: "柜体" }];
     var button = document.querySelector(".export-btn");
+    await ensureExportDir();
     window.__ffExporting = true;
     setBusy(button, "导出中");
     var sink = null;
@@ -624,7 +713,7 @@
       window.__ffExporting = false;
       setBusy(null, "");
     }
-    if (savedLabel) alert("已保存到桌面：" + savedLabel);
+    if (savedLabel) alert("已保存到：" + savedLabel);
   }
 
   async function onExportCurrent() {
@@ -632,6 +721,7 @@
     var ctx = prepareExport();
     if (!ctx) return;
     var button = document.querySelector(".export-current-btn");
+    await ensureExportDir();
     window.__ffExporting = true;
     setBusy(button, "导出中");
     try {
@@ -671,6 +761,14 @@
     if (!bar || bar.querySelector(".export-btn")) return;
     bar.appendChild(makeButton("export-btn", "导出", "导出全部柜体的板件图，并另存每款柜体的整柜实体图", onExport));
     bar.appendChild(makeButton("export-current-btn", "当前", "导出当前状态下的完整图片", onExportCurrent));
+    if (hasTauri()) {
+      bar.appendChild(makeButton("export-path-btn", "路径", savedExportDir() ? ("保存到：" + savedExportDir()) : "选择导出保存文件夹，未选择时保存到桌面", function () {
+        chooseExportDir().catch(function (error) {
+          alert("选择文件夹失败");
+          console.error(error);
+        });
+      }));
+    }
   }
 
   new MutationObserver(ensureButton).observe(document.documentElement, { childList: true, subtree: true });
