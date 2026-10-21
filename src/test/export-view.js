@@ -116,7 +116,7 @@
     var scene = view && view.m_Scene;
     if (!scene) return;
     scene.children.forEach(function (child) {
-      if (!child.isGroup) return;
+      if (!child.isGroup || !child.traverse) return;
       child.traverse(function (node) { node.visible = visible; });
     });
   }
@@ -124,8 +124,15 @@
   function frameShot(shot) {
     applyShotSize(shot);
     setDimensionsVisible(shot.view, false);
-    if (shot.view.ViewToSwiso) shot.view.ViewToSwiso();
-    shot.view.ZoomAll();
+    try {
+      if (shot.view.ViewToSwiso) shot.view.ViewToSwiso();
+      shot.view.ZoomAll();
+    } catch (error) {
+      setDimensionsVisible(shot.view, true);
+      if (shot.view.ViewToSwiso) shot.view.ViewToSwiso();
+      shot.view.ZoomAll();
+    }
+    if (!(shot.cam.m_ViewHeight > 0)) shot.cam.m_ViewHeight = 10;
     shot.cam.m_ViewHeight *= 1.04;
     shot.cam.Update();
   }
@@ -133,11 +140,13 @@
   function closeShot(shot) {
     if (!shot) return;
     setDimensionsVisible(shot.view, true);
+    var width = shot.width > 0 ? shot.width : 300;
+    var height = shot.height > 0 ? shot.height : 150;
     shot.renderer.setPixelRatio(shot.ratio);
-    shot.renderer.setSize(shot.width || 0, shot.height || 0, false);
-    shot.view._Width = shot.width;
-    shot.view._Height = shot.height;
-    shot.cam.SetSize(shot.width, shot.height);
+    shot.renderer.setSize(width, height, false);
+    shot.view._Width = width;
+    shot.view._Height = height;
+    shot.cam.SetSize(width, height);
     shot.cam.Update();
     shot.view.m_bNeedUpdate = true;
     shot.scratch.width = 1;
@@ -151,6 +160,10 @@
     var ctx = shot.scratchCtx;
     var width = glCanvas.width || EXPORT_SIZE;
     var height = glCanvas.height || EXPORT_SIZE;
+    if (src.width !== width || src.height !== height) {
+      src.width = width;
+      src.height = height;
+    }
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(glCanvas, 0, 0, width, height);
@@ -185,10 +198,23 @@
     maxY = Math.min(height - 1, maxY + pad);
     var cw = maxX - minX + 1;
     var ch = maxY - minY + 1;
+    var side = Math.max(cw, ch);
     var out = shot.out;
-    out.width = cw;
-    out.height = ch;
-    shot.outCtx.drawImage(src, minX, minY, cw, ch, 0, 0, cw, ch);
+    out.width = side;
+    out.height = side;
+    shot.outCtx.fillStyle = "#ffffff";
+    shot.outCtx.fillRect(0, 0, side, side);
+    if (side <= width && side <= height) {
+      var sx = Math.round((minX + maxX) / 2 - side / 2);
+      var sy = Math.round((minY + maxY) / 2 - side / 2);
+      if (sx < 0) sx = 0;
+      if (sy < 0) sy = 0;
+      if (sx + side > width) sx = width - side;
+      if (sy + side > height) sy = height - side;
+      shot.outCtx.drawImage(src, sx, sy, side, side, 0, 0, side, side);
+    } else {
+      shot.outCtx.drawImage(src, minX, minY, cw, ch, Math.round((side - cw) / 2), Math.round((side - ch) / 2), cw, ch);
+    }
     return out;
   }
 
@@ -298,14 +324,28 @@
     return !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
   }
 
-  function writeRaw(path, bytes, append) {
-    var invoke = window.__TAURI__.core.invoke;
-    return invoke("plugin:fs|write_file", bytes, {
+  var WRITE_CHUNK = 512 * 1024;
+
+  function writeOnce(path, bytes, append) {
+    return window.__TAURI__.core.invoke("plugin:fs|write_file", bytes, {
       headers: {
         path: encodeURIComponent(path),
         options: JSON.stringify(append ? { append: true } : {})
       }
     });
+  }
+
+  function writeRaw(path, bytes, append) {
+    if (!(window.__ffAppend && bytes && bytes.length > WRITE_CHUNK)) return writeOnce(path, bytes, append);
+    var parts = [];
+    for (var offset = 0; offset < bytes.length; offset += WRITE_CHUNK) parts.push(bytes.slice(offset, offset + WRITE_CHUNK));
+    var chain = writeOnce(path, parts[0], !!append);
+    for (var i = 1; i < parts.length; i++) {
+      (function (part) {
+        chain = chain.then(function () { return writeOnce(path, part, true); });
+      })(parts[i]);
+    }
+    return chain;
   }
 
   function desktopDirectory() {
@@ -318,6 +358,10 @@
     try { return String(localStorage.getItem(exportDirKey) || "").trim(); } catch (error) { return ""; }
   }
 
+  function pathButtonTitle(dir) {
+    return dir ? ("保存到：" + dir + "。点击可更换") : "选择导出保存文件夹，未选择时保存到桌面";
+  }
+
   function rememberExportDir(dir) {
     var text = String(dir || "").trim();
     try {
@@ -325,7 +369,7 @@
       else localStorage.removeItem(exportDirKey);
     } catch (error) {}
     var button = document.querySelector(".export-path-btn");
-    if (button) button.title = text ? ("保存到：" + text) : "选择导出保存文件夹，未选择时保存到桌面";
+    if (button) button.title = pathButtonTitle(text);
   }
 
   function encodeCommand(script) {
@@ -340,24 +384,31 @@
     return btoa(binary);
   }
 
+  function pathFromDialog(picked) {
+    if (picked == null || picked === false) return "";
+    if (typeof picked === "string") return picked.trim();
+    if (Array.isArray(picked)) return picked.length ? pathFromDialog(picked[0]) : "";
+    if (typeof picked === "object" && typeof picked.path === "string") return picked.path.trim();
+    return "";
+  }
+
   async function pickDirectory() {
+    var current = savedExportDir();
     if (!hasTauri()) {
-      var typed = window.prompt("请输入导出保存文件夹的完整路径", savedExportDir() || "");
+      var typed = window.prompt("请输入导出保存文件夹的完整路径", current || "");
       return typed ? typed.trim() : "";
     }
     var invoke = window.__TAURI__.core.invoke;
-    var payloads = [
-      { directory: true, multiple: false, title: "选择导出保存文件夹" },
-      { options: { directory: true, multiple: false, title: "选择导出保存文件夹" } }
-    ];
+    var options = { directory: true, multiple: false, title: "选择导出保存文件夹" };
+    if (current) options.defaultPath = current;
+    var payloads = [options, { options: options }];
     for (var i = 0; i < payloads.length; i++) {
       try {
-        var picked = await invoke("plugin:dialog|open", payloads[i]);
-        if (typeof picked === "string") return picked.trim();
-        if (picked == null) return "";
+        var picked = pathFromDialog(await invoke("plugin:dialog|open", payloads[i]));
+        if (picked) return picked;
+        return "";
       } catch (error) {}
     }
-    var current = savedExportDir();
     var script = [
       "Add-Type -AssemblyName System.Windows.Forms",
       "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
@@ -377,22 +428,62 @@
 
   async function chooseExportDir() {
     var picked = await pickDirectory();
-    if (picked) rememberExportDir(picked);
-    return picked || savedExportDir();
+    if (!picked) return "";
+    rememberExportDir(picked);
+    alert("之后将保存到：" + picked);
+    return picked;
   }
 
-  async function ensureExportDir() {
-    if (!hasTauri() || savedExportDir()) return;
-    await chooseExportDir();
+  async function dirExists(dir) {
+    if (!dir || !hasTauri()) return false;
+    try {
+      var found = await window.__TAURI__.core.invoke("plugin:fs|exists", { path: dir });
+      if (found === true || found === "true") return true;
+    } catch (error) {}
+    try {
+      var output = await runCommand("if (Test-Path -LiteralPath " + psQuote(dir) + " -PathType Container) { 'yes' }");
+      return String(output || "").indexOf("yes") >= 0;
+    } catch (error2) {
+      return false;
+    }
+  }
+
+  async function ensureDir(dir) {
+    if (!dir) return false;
+    if (await dirExists(dir)) return true;
+    if (!hasTauri()) return false;
+    var invoke = window.__TAURI__.core.invoke;
+    var payloads = [
+      { path: dir, options: { recursive: true } },
+      { path: dir, recursive: true }
+    ];
+    for (var i = 0; i < payloads.length; i++) {
+      try { await invoke("plugin:fs|mkdir", payloads[i]); } catch (error) {}
+    }
+    try {
+      await runCommand("New-Item -ItemType Directory -Force -Path " + psQuote(dir) + " | Out-Null");
+    } catch (error2) {}
+    if (await dirExists(dir)) return true;
+    var probe = joinPath(dir, ".ff-dir-probe");
+    try {
+      await writeOnce(probe, new Uint8Array([1]), false);
+    } catch (error3) {
+      return false;
+    }
+    try { await runCommand("Remove-Item -LiteralPath " + psQuote(probe) + " -Force"); } catch (cleanupError) {}
+    return true;
   }
 
   async function exportDirectory() {
     var custom = savedExportDir();
-    var dir = custom || await desktopDirectory();
+    if (custom && await ensureDir(custom)) return custom;
     if (custom) {
-      try { await runCommand("New-Item -ItemType Directory -Force -Path " + psQuote(dir) + " | Out-Null"); } catch (error) {}
+      rememberExportDir("");
+      alert("原来的保存文件夹无法使用，这次改存到桌面：" + custom);
     }
-    return dir;
+    var desktop = await desktopDirectory();
+    if (!await ensureDir(desktop)) throw new Error("找不到桌面文件夹");
+    return desktop;
   }
 
   function desktopFile(filename) {
@@ -458,8 +549,9 @@
     return ok;
   }
 
-  function FolderOut(dir) {
+  function FolderOut(dir, root) {
     this.dir = dir;
+    this.root = root || dir;
     this.made = new Set();
     this.count = 0;
   }
@@ -469,11 +561,19 @@
     var slash = Math.max(full.lastIndexOf("\\"), full.lastIndexOf("/"));
     var parent = slash > 0 ? full.slice(0, slash) : this.dir;
     var self = this;
-    var ready = this.made.has(parent) ? Promise.resolve() : runCommand("New-Item -ItemType Directory -Force -Path " + psQuote(parent) + " | Out-Null").then(function () {
-      self.made.add(parent);
+    var ready = this.made.has(parent) ? Promise.resolve(true) : ensureDir(parent).then(function (ok) {
+      if (ok) self.made.add(parent);
+      return ok;
     });
-    return ready.then(function () {
+    return ready.then(function (ok) {
+      if (!ok) throw new Error("无法创建文件夹");
       return writeRaw(full, data, false);
+    }).catch(function () {
+      var flat = joinPath(self.root, String(name).replace(/[\\/]/g, "_"));
+      return ensureDir(self.root).then(function (ok) {
+        if (!ok) throw new Error("无法创建文件夹：" + self.root);
+        return writeRaw(flat, data, false);
+      });
     }).then(function () {
       self.count += 1;
     });
@@ -481,9 +581,12 @@
 
   async function openSink(filename) {
     var dir = await exportDirectory();
+    var labelDir = dir;
     if (await appendSupported(dir)) return { kind: "zip", out: new ZipOut(joinPath(dir, filename)), label: joinPath(dir, filename) };
     var folder = joinPath(dir, filename.replace(/\.zip$/i, ""));
-    return { kind: "folder", out: new FolderOut(folder), label: folder };
+    if (await ensureDir(folder)) labelDir = folder;
+    else folder = dir;
+    return { kind: "folder", out: new FolderOut(folder, dir), label: labelDir };
   }
 
   function download(bytes, filename, type) {
@@ -578,11 +681,53 @@
     return name;
   }
 
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
   async function loadCabinet(vm, boxId) {
     if (String(vm.selBoxID) === String(boxId) && vm.viewData && vm.viewData.length) return true;
-    await vm.getViewData("", "", boxId);
-    await waitFrame();
-    return String(vm.selBoxID) === String(boxId) && vm.viewData && vm.viewData.length > 0;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await sleep(attempt ? 800 * attempt : 300);
+      var origAlert = window.alert;
+      window.alert = function () {};
+      try {
+        await vm.getViewData("", "", boxId);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        window.alert = origAlert;
+      }
+      await waitFrame();
+      if (String(vm.selBoxID) === String(boxId) && vm.viewData && vm.viewData.length) return true;
+    }
+    return false;
+  }
+
+  function errorText(error) {
+    if (error == null || error === "") return "未知错误";
+    if (typeof error === "string") return error;
+    if (error.message) return String(error.message);
+    try { return JSON.stringify(error); } catch (ignored) { return String(error); }
+  }
+
+  function meshCount(view) {
+    var count = 0;
+    if (!view || !view.m_Scene) return 0;
+    view.m_Scene.children.forEach(function (child) { if (child.isMesh) count += 1; });
+    return count;
+  }
+
+  function clearHighlight(view) {
+    if (!view || !view.oldMesh) return;
+    if (view._Settings && view._Settings.boardMaterial) view.oldMesh.material = view._Settings.boardMaterial;
+    view.oldMesh = null;
+  }
+
+  function ensureScene(show, vm) {
+    var need = (vm.viewData || []).length;
+    if (need && meshCount(viewer()) >= need) return;
+    show.setData(vm.viewData, true);
   }
 
   function prepareExport() {
@@ -618,7 +763,6 @@
     var boxes = (ctx.vm.boxList || []).slice();
     if (!boxes.length) boxes = [{ BoxID: ctx.vm.selBoxID, Name: "柜体" }];
     var button = document.querySelector(".export-btn");
-    await ensureExportDir();
     window.__ffExporting = true;
     setBusy(button, "导出中");
     var sink = null;
@@ -642,47 +786,69 @@
       var multi = boxes.length > 1;
       var zipName = multi ? safeName(ctx.vm.orderNo || "订单") + ".zip" : cabinetName(ctx.vm) + ".zip";
       var count = 0;
+      var failures = [];
       async function store(name) {
-        var bytes = grab(ctx.shot);
-        if (hasTauri()) {
-          if (!sink) sink = await openSink(zipName);
-          await sink.out.add(name, bytes);
-        } else {
-          memoryFiles.push({ name: name, data: bytes });
+        try {
+          var bytes = grab(ctx.shot);
+          if (hasTauri()) {
+            if (!sink) sink = await openSink(zipName);
+            await sink.out.add(name, bytes);
+          } else {
+            memoryFiles.push({ name: name, data: bytes });
+          }
+          count += 1;
+        } catch (error) {
+          failures.push(errorText(error));
+          console.error(name, error);
         }
-        count += 1;
         await pause();
       }
       for (var b = 0; b < boxes.length; b++) {
         var box = boxes[b];
         if (String(ctx.vm.selBoxID) !== String(box.BoxID)) ctx.switched = true;
         setBusy(button, "柜" + (b + 1) + "/" + boxes.length);
-        if (!await loadCabinet(ctx.vm, box.BoxID)) continue;
+        if (!await loadCabinet(ctx.vm, box.BoxID)) {
+          failures.push((box.Name || "柜体") + " 图纸下载失败，已跳过");
+          continue;
+        }
         var live = viewer();
         if (live && ctx.shot.view !== live) {
           closeShot(ctx.shot);
           ctx.shot = openShot(live);
         }
         var show = ctx.vm.$refs.showView;
-        show.setData(ctx.vm.viewData, true);
-        show.setMaterial({ transparent: false });
-        frameShot(ctx.shot);
-        await store("实体图/" + solidFileName(ctx.vm, box, solidNames));
-        show.setMaterial({ transparent: ctx.viewTrans });
+        try {
+          ensureScene(show, ctx.vm);
+          clearHighlight(viewer() || ctx.view);
+          show.setMaterial({ transparent: false });
+          frameShot(ctx.shot);
+          await store("实体图/" + solidFileName(ctx.vm, box, solidNames));
+          show.setMaterial({ transparent: ctx.viewTrans });
+        } catch (error) {
+          failures.push(errorText(error));
+          console.error(error);
+          continue;
+        }
         var cabinetRows = boardRows(ctx.vm);
         var folder = multi ? uniqueFolder(box.Name || ("柜体" + (b + 1)), folders) : "";
         var used = new Set();
         for (var i = 0; i < cabinetRows.length; i++) {
           setBusy(button, (b + 1) + "/" + boxes.length + " " + (i + 1) + "/" + cabinetRows.length);
-          ctx.vm.selectedBlockNo = cabinetRows[i].row.ItemNo;
-          show.selectBlock(cabinetRows[i].row.DataID);
+          try {
+            ctx.vm.selectedBlockNo = cabinetRows[i].row.ItemNo;
+            show.selectBlock(cabinetRows[i].row.DataID);
+          } catch (error) {
+            failures.push(errorText(error));
+            console.error(error);
+            continue;
+          }
           var name = fileName(cabinetRows[i].row, i, used);
           if (folder) name = folder + "/" + name;
           await store(name);
         }
       }
       if (!count) {
-        alert("没有可导出的板件");
+        alert(failures.length ? ("导出失败：" + failures[0]) : "没有可导出的板件");
         return;
       }
       var savedLabel = "";
@@ -696,7 +862,7 @@
         browserDownload(buildZip(memoryFiles), zipName);
       }
     } catch (error) {
-      alert("导出失败");
+      alert("导出失败：" + errorText(error));
       console.error(error);
     } finally {
       closeShot(ctx.shot);
@@ -713,7 +879,7 @@
       window.__ffExporting = false;
       setBusy(null, "");
     }
-    if (savedLabel) alert("已保存到：" + savedLabel);
+    if (savedLabel) alert("已保存到：" + savedLabel + (failures && failures.length ? "\n其中 " + failures.length + " 项未导出：" + failures[0] : ""));
   }
 
   async function onExportCurrent() {
@@ -721,7 +887,6 @@
     var ctx = prepareExport();
     if (!ctx) return;
     var button = document.querySelector(".export-current-btn");
-    await ensureExportDir();
     window.__ffExporting = true;
     setBusy(button, "导出中");
     try {
@@ -734,7 +899,7 @@
       ctx.shot = null;
       await download(png, cabinetName(ctx.vm) + "_当前.png", "image/png");
     } catch (error) {
-      alert("导出失败");
+      alert("导出失败：" + errorText(error));
       console.error(error);
     } finally {
       closeShot(ctx.shot);
@@ -761,14 +926,12 @@
     if (!bar || bar.querySelector(".export-btn")) return;
     bar.appendChild(makeButton("export-btn", "导出", "导出全部柜体的板件图，并另存每款柜体的整柜实体图", onExport));
     bar.appendChild(makeButton("export-current-btn", "当前", "导出当前状态下的完整图片", onExportCurrent));
-    if (hasTauri()) {
-      bar.appendChild(makeButton("export-path-btn", "路径", savedExportDir() ? ("保存到：" + savedExportDir()) : "选择导出保存文件夹，未选择时保存到桌面", function () {
-        chooseExportDir().catch(function (error) {
-          alert("选择文件夹失败");
-          console.error(error);
-        });
-      }));
-    }
+    bar.appendChild(makeButton("export-path-btn", "路径", pathButtonTitle(savedExportDir()), function () {
+      chooseExportDir().catch(function (error) {
+        alert("选择文件夹失败：" + errorText(error));
+        console.error(error);
+      });
+    }));
   }
 
   new MutationObserver(ensureButton).observe(document.documentElement, { childList: true, subtree: true });
