@@ -648,9 +648,15 @@
     return new Promise(function (resolve) { requestAnimationFrame(resolve); });
   }
 
+  function packageNo(vm) {
+    var info = vm.orderInfo || {};
+    var remark = String(info.Remark == null ? "" : info.Remark).trim();
+    return safeName(remark || vm.orderNo || "订单");
+  }
+
   function cabinetName(vm) {
     var box = (vm.boxList || []).find(function (item) { return String(item.BoxID) === String(vm.selBoxID); });
-    return safeName(vm.orderNo || "订单") + "_" + safeName(box && box.Name || "柜体");
+    return packageNo(vm) + "_" + safeName(box && box.Name || "柜体");
   }
 
   function uniqueFolder(name, used) {
@@ -784,7 +790,7 @@
       var folders = new Set();
       var solidNames = new Set();
       var multi = boxes.length > 1;
-      var zipName = multi ? safeName(ctx.vm.orderNo || "订单") + ".zip" : cabinetName(ctx.vm) + ".zip";
+      var zipName = multi ? packageNo(ctx.vm) + ".zip" : cabinetName(ctx.vm) + ".zip";
       var count = 0;
       var failures = [];
       async function store(name) {
