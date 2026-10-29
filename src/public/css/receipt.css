@@ -1,0 +1,186 @@
+.sheet {
+  position: relative;
+  background: #fff;
+  color: #1a1a1a;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.sheet * { box-sizing: border-box; }
+
+.sheet.invoice {
+  width: min(820px, 100%);
+  min-height: 1040px;
+  margin: 0 auto;
+  padding: 42px 48px 36px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 50px rgba(50, 36, 12, 0.08);
+}
+
+.sheet.compact {
+  width: min(420px, 100%);
+  margin: 0 auto;
+  padding: 28px 26px 32px;
+  box-shadow: 0 18px 50px rgba(50, 36, 12, 0.08);
+}
+
+.ornament {
+  position: absolute;
+  width: 280px;
+  height: 340px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ornament-tr { top: -10px; right: -30px; }
+.ornament-bl { left: -40px; bottom: -20px; transform: rotate(180deg); }
+
+.wm {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  font-size: 78px;
+  letter-spacing: 0.14em;
+  color: rgba(176, 148, 92, 0.14);
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 0;
+  font-family: "PMingLiU", "Microsoft JhengHei", Palatino, serif;
+}
+
+.sheet > *:not(.ornament):not(.wm) { position: relative; z-index: 1; }
+
+.sheet-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.sheet-logo { width: 188px; height: auto; display: block; }
+
+.sheet h1 {
+  margin: 18px 0 0;
+  font-family: "Palatino Linotype", Palatino, "PMingLiU", "Microsoft JhengHei", serif;
+  font-size: 48px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.sheet.compact h1 {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 28px;
+}
+
+.sheet.compact .sheet-logo { width: 150px; margin: 0 auto 4px; }
+
+.sheet-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 28px 0 26px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.sheet-meta p { margin: 0; }
+.sheet-to { max-width: 62%; }
+.addr { white-space: pre-line; }
+.sheet-date { text-align: right; white-space: nowrap; }
+.sheet-date .orderno { margin-top: 8px; }
+
+.sheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  border: 1.5px solid #1c1c1c;
+}
+
+.sheet-table th,
+.sheet-table td {
+  border: 1px solid #1c1c1c;
+  padding: 11px 10px;
+  vertical-align: top;
+  font-size: 14px;
+}
+
+.sheet-table th {
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-align: center;
+  font-size: 13px;
+}
+
+.c-item { width: 68px; text-align: center; }
+.c-qty { width: 110px; text-align: center; }
+.c-amt { width: 150px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.desc { white-space: pre-line; text-align: left; }
+
+.sheet-total {
+  margin-left: auto;
+  width: 280px;
+  display: grid;
+  grid-template-columns: 1fr 150px;
+  align-items: stretch;
+}
+
+.sheet-total span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  font-weight: 650;
+}
+
+.sheet-total strong {
+  border: 1.5px solid #1c1c1c;
+  border-top: 0;
+  padding: 8px 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-notes {
+  margin: 28px 0 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.sheet-notes li { margin: 4px 0; }
+
+.sheet-foot {
+  margin-top: auto;
+  padding-top: 36px;
+  text-align: center;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.sheet.compact .center { text-align: center; }
+.sheet.compact .muted { color: #5c564c; font-size: 12px; margin: 4px 0 0; white-space: pre-line; }
+.rule { height: 1px; background: #1c1c1c; margin: 14px 0; }
+.compact-meta { font-size: 13px; line-height: 1.55; }
+.compact-meta p { margin: 0; }
+.compact-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.compact-table th, .compact-table td { text-align: left; font-size: 13px; padding: 7px 0; border-bottom: 1px solid #e6e0d6; vertical-align: top; }
+.compact-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.compact-total { display: flex; justify-content: space-between; font-weight: 700; margin-top: 10px; font-size: 16px; }
+.balance-list { margin: 14px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.balance-list li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed #e6e0d6; }
+.sheet.compact .sheet-notes { margin-top: 16px; }
+.section-label { margin: 22px 0 8px; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; }
+
+body.receipt-export { margin: 0; background: #e7e0d4; font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; }
+body.receipt-export .sheet { margin: 24px auto; }
+
+@media print {
+  body.receipt-export { background: white; }
+  .sheet { box-shadow: none !important; margin: 0 !important; }
+  .sheet.invoice { min-height: 250mm; width: auto; }
+  @page { size: A4; margin: 12mm; }
+}
