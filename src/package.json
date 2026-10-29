@@ -1,0 +1,13 @@
+{
+  "name": "bianmore-hair",
+  "version": "1.0.0",
+  "private": true,
+  "description": "變MORE髮 美容會員系統",
+  "scripts": {
+    "start": "node -e \"require('child_process').exec('cmd /c start \\\"\\\" \\\"'+require('path').resolve('index.html')+'\\\"')\"",
+    "build-db": "node scripts/build-browser.js"
+  },
+  "devDependencies": {
+    "sql.js": "^1.15.2"
+  }
+}
