@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+
+<html lang="zh-cmn-Hans" style="height: 99%">
+<head>
+<meta charset="utf-8"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="width=device-width,initial-scale=1.0,maximum-scale=1.0" name="viewport"/>
+<link href="https://cdn.leye.site/mes/front/favicon.ico" rel="icon"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>标签图纸转换器</title>
+<script>
+(function () {
+  if (location.protocol === "file:") {
+    var hash = /^#\/boxview\//.test(location.hash) ? location.hash : "";
+    location.replace("http://127.0.0.1:8765/" + hash);
+    return;
+  }
+  document.documentElement.classList.toggle("show-home", !/^#\/boxview\//.test(location.hash));
+  var localProxy = location.hostname === "127.0.0.1" && location.port === "8765";
+  if (localProxy || location.hostname === "sc.leye.site") return;
+  var apiOrigin = "https://sc.leye.site";
+
+  function toApiUrl(url) {
+    if (typeof url !== "string" || !url) return "";
+    if (url.indexOf("/api/") === 0) return apiOrigin + url;
+    try {
+      var abs = new URL(url, location.href);
+      if ((abs.origin === location.origin || abs.origin === apiOrigin) && abs.pathname.indexOf("/api/") === 0) {
+        return apiOrigin + abs.pathname + abs.search;
+      }
+    } catch (e) {}
+    return "";
+  }
+
+  function hasTauri() {
+    return !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+  }
+
+  function toU8(data) {
+    if (!data) return new Uint8Array(0);
+    if (data instanceof Uint8Array) return data;
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (Array.isArray(data)) return new Uint8Array(data);
+    return new Uint8Array(0);
+  }
+
+  function concatBytes(parts) {
+    var len = 0;
+    for (var i = 0; i < parts.length; i++) len += parts[i].length;
+    var out = new Uint8Array(len);
+    var offset = 0;
+    for (var j = 0; j < parts.length; j++) {
+      out.set(parts[j], offset);
+      offset += parts[j].length;
+    }
+    return out;
+  }
+
+  function bodyText(body) {
+    if (body == null || body === "") return "";
+    if (typeof body === "string") return body;
+    if (body instanceof ArrayBuffer) return new TextDecoder("utf-8").decode(new Uint8Array(body));
+    return String(body);
+  }
+
+  function psQuote(value) {
+    return "'" + String(value == null ? "" : value).replace(/'/g, "''") + "'";
+  }
+
+  function readBody(invoke, rid) {
+    var parts = [];
+    function step() {
+      return invoke("plugin:http|fetch_read_body", { rid: rid }).then(function (data) {
+        var bytes = toU8(data);
+        if (!bytes.length) return concatBytes(parts);
+        var last = bytes[bytes.length - 1];
+        if (bytes.length > 1) parts.push(bytes.subarray(0, bytes.length - 1));
+        if (last === 1) return concatBytes(parts);
+        return step();
+      });
+    }
+    return step();
+  }
+
+  function pakeShell(method, url, text) {
+    var command = "$ProgressPreference='SilentlyContinue'; $resp = Invoke-WebRequest -UseBasicParsing -Method " + method + " -Uri " + psQuote(url) + " -ContentType 'application/json; charset=utf-8' -Body " + psQuote(text) + "; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$resp.Content))";
+    return window.__TAURI__.core.invoke("run_command", { command: command }).then(function (b64) {
+      var clean = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+      if (!clean) return "";
+      var bin = atob(clean);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 255;
+      return new TextDecoder("utf-8").decode(bytes);
+    });
+  }
+
+  function pakeRequest(method, url, body) {
+    var text = bodyText(body);
+    var invoke = window.__TAURI__.core.invoke;
+    var data = text ? Array.from(new TextEncoder().encode(text)) : null;
+    return invoke("plugin:http|fetch", {
+      clientConfig: {
+        method: method || "GET",
+        url: url,
+        headers: [["content-type", "application/json"], ["accept", "application/json"]],
+        data: data
+      }
+    }).then(function (first) {
+      if (first && typeof first === "object" && first.status != null && Object.prototype.hasOwnProperty.call(first, "data")) {
+        return new TextDecoder("utf-8").decode(toU8(first.data));
+      }
+      var rid = typeof first === "number" ? first : first && first.rid;
+      if (rid == null) throw new Error("http");
+      return invoke("plugin:http|fetch_send", { rid: rid }).then(function (sent) {
+        return readBody(invoke, sent.rid).then(function (buf) {
+          if (sent.status >= 400) throw new Error(String(sent.status));
+          return new TextDecoder("utf-8").decode(buf);
+        });
+      });
+    }).catch(function () {
+      return pakeShell(method || "GET", url, text);
+    });
+  }
+
+  function defineState(xhr, status, text) {
+    var values = { readyState: 4, status: status, statusText: status ? "OK" : "", responseText: text, response: text };
+    Object.keys(values).forEach(function (key) {
+      try {
+        Object.defineProperty(xhr, key, { configurable: true, get: function () { return values[key]; } });
+      } catch (e) {}
+    });
+  }
+
+  var NativeXHR = window.XMLHttpRequest;
+  function XHR() {
+    var xhr = new NativeXHR();
+    var open = xhr.open;
+    var send = xhr.send;
+    var apiUrl = "";
+    var method = "GET";
+    var viaPake = false;
+    xhr.open = function (m, url) {
+      method = m || "GET";
+      apiUrl = toApiUrl(url);
+      viaPake = !!(apiUrl && hasTauri());
+      var args = Array.prototype.slice.call(arguments);
+      if (apiUrl) args[1] = apiUrl;
+      return open.apply(xhr, args);
+    };
+    xhr.send = function (body) {
+      if (!viaPake) return send.apply(xhr, arguments);
+      pakeRequest(method, apiUrl, body).then(function (text) {
+        defineState(xhr, 200, text);
+        xhr.getAllResponseHeaders = function () {
+          return "content-type: application/json; charset=utf-8\r\n";
+        };
+        xhr.getResponseHeader = function (name) {
+          return String(name || "").toLowerCase() === "content-type" ? "application/json; charset=utf-8" : null;
+        };
+        if (typeof xhr.onreadystatechange === "function") xhr.onreadystatechange();
+        if (typeof xhr.onload === "function") xhr.onload();
+        try { xhr.dispatchEvent(new Event("load")); } catch (e) {}
+        try { xhr.dispatchEvent(new Event("loadend")); } catch (e) {}
+      }, function () {
+        defineState(xhr, 0, "");
+        if (typeof xhr.onerror === "function") xhr.onerror();
+        try { xhr.dispatchEvent(new Event("error")); } catch (e) {}
+      });
+    };
+    return xhr;
+  }
+  XHR.prototype = NativeXHR.prototype;
+  XHR.UNSENT = 0;
+  XHR.OPENED = 1;
+  XHR.HEADERS_RECEIVED = 2;
+  XHR.LOADING = 3;
+  XHR.DONE = 4;
+  window.XMLHttpRequest = XHR;
+
+  if (window.fetch) {
+    var origFetch = window.fetch;
+    window.fetch = function (input, init) {
+      var raw = typeof input === "string" ? input : (input && input.url);
+      var apiUrl = toApiUrl(raw);
+      if (apiUrl && hasTauri()) {
+        var method = (init && init.method) || (input && input.method) || "GET";
+        var body = init && init.body;
+        return pakeRequest(method, apiUrl, body).then(function (text) {
+          return new Response(text, { status: 200, headers: { "content-type": "application/json" } });
+        });
+      }
+      if (typeof input === "string" && apiUrl) input = apiUrl;
+      return origFetch.call(this, input, init);
+    };
+  }
+})();
+</script>
+<script type="importmap">
+{
+  "imports": {
+    "https://cdn.leye.site/mes/front/assets/CADView-B5OwdNAZ.js": "./CADView-B5OwdNAZ.js"
+  }
+}
+</script>
+<script src="/export-view.js"></script>
+<script crossorigin="" src="https://cdn.leye.site/mes/front/assets/wxapp-merFg_so.js" type="module"></script>
+<link crossorigin="" href="https://cdn.leye.site/mes/front/assets/element-laAY0jyH.css" rel="stylesheet"/>
+<link crossorigin="" href="https://cdn.leye.site/mes/front/assets/wxapp-kU7gXbPn.css" rel="stylesheet"/>
+<link href="/home.css" rel="stylesheet"/>
+</head>
+<body>
+<div class="home">
+  <main class="home-panel">
+    <h1 class="home-name">标签图纸转换器</h1>
+    <label class="home-hint" for="board-code">请输入板件码</label>
+    <input id="board-code" class="home-dialog-input" type="text" inputmode="numeric" autocomplete="off" placeholder="板件码" autofocus="autofocus"/>
+    <button class="home-ok" type="button">确定</button>
+  </main>
+  <div class="home-toast" hidden></div>
+</div>
+<div id="app"></div>
+<script src="/home.js"></script>
+</body>
+</html>
